@@ -4,7 +4,6 @@ from torch.utils.data import Dataset
 
 from mixmil.simulation import load_simulation
 
-
 def setup_scatter(Xs):
     device = Xs[0].device
     x = torch.cat(Xs, dim=0)
@@ -64,3 +63,6 @@ def load_data(dataset="simulation", norm_factor="std_sqrt", **kwargs):
     else:
         raise ValueError(f"Unknown dataset: {dataset}")
     return X, F, Y, u, w
+
+
+

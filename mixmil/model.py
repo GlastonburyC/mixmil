@@ -15,26 +15,9 @@ class MixMIL(torch.nn.Module):
     """Attention-based Multi-instance Mixed Models
 
     https://arxiv.org/abs/2311.02455
-
     """
 
     def __init__(self, Q, K, P=1, likelihood="binomial", n_trials=2, mean_field=False, init_params=None):
-        r"""Initialize the MixMil class.
-
-        Parameters:
-        - Q (int): The dimension of the latent space.
-        - K (int): The number of fixed effects.
-        - P (int): The number of outputs.
-        - likelihood (str, optional): The likelihood to use. Either "binomial" or "categorical". Default is "binomial".
-        - n_trials (int, optional): Number of trials for binomial likelihood. Not used for categorical. Default is 2.
-        - mean_field (bool, optional): Toggle mean field approximation for the posterior. Default is False.
-        - init_params (tuple, optional): Tuple of (mean, var, var_z, alpha) to initialize the model. Default is None.
-            mean (torch.Tensor): The mean of the posterior. Shape: (Q, P). d
-            var (torch.Tensor): The variance of the posterior. Shape: (Q, P).
-            var_z (torch.Tensor): The $\sigma_{\beta}^2$ hparam of the prior.
-                Shape: (1, P) with separate and (1, 1) with shared priors .
-            alpha (torch.Tensor): The fixed effect parameters. Shape: (K, P).
-        """
         super().__init__()
         self.Q = Q
 
@@ -43,7 +26,8 @@ class MixMIL(torch.nn.Module):
         log_sigma_z = torch.full((1, P), 0.5 * np.log(0.5))
 
         if init_params is not None:
-            *_, var_z, alpha = init_params
+            *_, var_z, alpha_ = init_params
+            alpha = alpha_
             log_sigma_z = 0.5 * torch.log(var_z)
 
         self.alpha = torch.nn.Parameter(alpha)
@@ -56,10 +40,14 @@ class MixMIL(torch.nn.Module):
         self.n_trials = n_trials if likelihood == "binomial" else None
         self.is_trained = False
 
+        # Introduce a scale parameter for Normal likelihood
+        if self.likelihood_name == "normal":
+            self.log_scale = torch.nn.Parameter(torch.tensor(0.0))
+
     def init_with_mean_model(Xs, F, Y, likelihood="binomial", n_trials=None, mean_field=False):
         assert (likelihood == "binomial" and n_trials is not None and 0 < n_trials <= 2) or (
-            likelihood == "categorical" and n_trials is None
-        ), f"n_trials must be 1 or 2 to initialize with binomial mean model, got {n_trials=} and {likelihood=}"
+            likelihood in ["categorical", "normal"] and n_trials is None
+        ), f"n_trials must be 1 or 2 for binomial. For {likelihood}, n_trials must be None."
         init_params = get_init_params(Xs, F, Y, likelihood, n_trials)
         Q, K, P = Xs[0].shape[1], F.shape[1], init_params[0].shape[1]
         return MixMIL(Q, K, P, likelihood, n_trials, mean_field, init_params)
@@ -94,10 +82,15 @@ class MixMIL(torch.nn.Module):
             if logits.shape[-1] == 1:
                 logits = torch.cat([-logits, logits], 2)
             return Categorical(logits=logits).log_prob(y).mean()
+        elif self.likelihood_name == "normal":
+            scale = torch.exp(self.log_scale)
+            # Ensure shapes match: If P=1, reshape y as needed
+            if y.ndim == 2 and logits.shape[-1] == 1:
+                y = y[..., None]
+            return Normal(loc=logits, scale=scale).log_prob(y).sum(1).mean()
 
     def loss(self, u, f, y, kld_w=1.0, return_dict=False):
         logits = f.mm(self.alpha)[:, :, None] + u
-
         ll = self.likelihood(logits, y)
         kld = kl_divergence(self.posterior_distribution, self.prior_distribution)
         kld_term = kld_w * kld.sum() / y.shape[0]
@@ -142,7 +135,6 @@ class MixMIL(torch.nn.Module):
 
     def _calc_bag_emb_effect_scatter(self, beta_u, eta, Xs):
         x, i, i_ptr = setup_scatter(Xs)
-
         _w = torch.einsum("iq,qps->ips", x, beta_u)
         w = scatter_softmax(_w, i, dim=0)
         t = torch.einsum("iq,qps->ips", x, eta)
@@ -184,7 +176,6 @@ class MixMIL(torch.nn.Module):
         if torch.is_tensor(Xs):
             _w = torch.einsum("niq,qp->nip", Xs, beta_u)
             w = torch.softmax(_w, dim=1)
-
         else:
             x, i, _ = setup_scatter(Xs)
             _w = torch.einsum("iq,qp->ip", x, beta_u)
@@ -205,4 +196,6 @@ class MixMIL(torch.nn.Module):
         string += f"\n(alpha): Parameter(shape={tuple(self.alpha.shape)})\n"
         string += f"(log_sigma_u): Parameter(shape={tuple(self.log_sigma_u.shape)})\n"
         string += f"(log_sigma_z): Parameter(shape={tuple(self.log_sigma_z.shape)})"
+        if self.likelihood_name == "normal":
+            string += f"\n(log_scale): Parameter(shape={tuple(self.log_scale.shape)})"
         return string
