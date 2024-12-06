@@ -4,7 +4,7 @@ import statsmodels.api as sm
 import torch
 from sklearn.linear_model import LogisticRegressionCV
 from tqdm.auto import trange
-
+from sklearn.linear_model import RidgeCV
 from mixmil.data import xgower_factor
 
 

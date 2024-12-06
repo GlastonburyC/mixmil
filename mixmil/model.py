@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from torch.distributions import Binomial, Categorical, LowRankMultivariateNormal
+from torch.distributions import Binomial, Categorical, LowRankMultivariateNormal, Normal
 from torch.distributions.kl import kl_divergence
 from torch.utils.data import DataLoader
 from torch_scatter import scatter_softmax, segment_add_csr
